@@ -1,0 +1,234 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Tim O'Brien"
+date: "Saturday, August 15, 2015"
+output: html_document
+---
+
+### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+* Exactly according to the specification (Class A)
+* Throwing the elbows to the front (Class B)
+* Lifting the dumbbell only halfway (Class C)
+* Lowering the dumbbell only halfway (Class D)
+* Throwing the hips to the front (Class E)
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+The data for this project was provided by http://groupware.les.inf.puc-rio.br/har. They were very generous in allowing their data to be used for this project.
+
+### Executive Summary
+
+In order to to predict the manner in which they did the exercise, I followed these steps:
+
+* Load the libraries and set variables
+* Load the data
+* Clean and transform the data
+* Generate models and cross-validate
+* Make a prediction and output results
+
+Conclusion: The random forest training model accurately predicted the classification of 20 observations using 46 predictors. The cross-validation accuracy of 99%, a 95% confidence interval of at least 99% with an out-of-sample error rate of .76 seems to provide a solid, predictive model. It did accurately predict the results using the model with the training data.
+
+### Load libraries and set variables
+Here is where I load all the necessary libraries and set variables for the urls and files. There are a number of warnings when loading the libraries so I set echo=FALSE and suppressed warnings to reduce the cruft in the knitter document.
+```{r echo=FALSE}
+library(downloader);
+library(lattice); library(ggplot2);
+suppressWarnings(library(caret)); library(caret);
+suppressWarnings(library(rpart)); library(rpart);
+suppressWarnings(library(rattle)); library(rattle);
+suppressWarnings(library(randomForest)); library(randomForest);
+suppressWarnings(library(rpart.plot)); library(rpart.plot);
+library(knitr);
+
+dirData <- "./data"
+dirOutput <- "./output"
+if(!file.exists(dirData)){dir.create(dirData)}
+if(!file.exists(dirOutput)){dir.create(dirOutput)}
+fileTrain <- paste(dirData, "pml-training.csv", sep="/")
+fileTest <- paste(dirData, "pml-testing.csv", sep="/")
+urlTrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urlTest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+```
+
+### Load Data
+Now, I download the training and test data from the site,
+```{r}
+if(!file.exists(fileTrain)){download(urlTrain, dest=fileTrain, mode="wb")}
+if(!file.exists(fileTest)){download(urlTest, dest=fileTest, mode="wb")}
+```
+Record the date it was downloaded,
+```{r}
+dateDownloaded <- date()
+dateDownloaded
+```
+Perform a bit of cleaning by converting blanks and DIV/0 into NAs, and load the data into two dataframes.
+```{r}
+dfTrain <- read.csv(fileTrain, na.strings=c("NA", "DIV/0", ""))
+dfTest <- read.csv(fileTest, na.strings=c("NA", "DIV/0", ""))
+```
+
+### Clean and transform data
+After performing some preliminary exploration (see exploration.R), I decided the data needed to be transformed a bit for processing. The first step was to remove columns not relevant for analysis.
+```{r}
+dfTrain <- dfTrain[, -c(1:7)]
+dfTest <- dfTest[, -c(1:7)]
+```
+
+I then pruned columns with zero values. Using nzv was an option but it only reduced the columns to 52 instead of 53. So, I stayed with just removing the columns with all zero values.
+```{r}
+dfTrain <- dfTrain[, colSums(is.na(dfTrain)) == 0]
+dfTest <- dfTest[, colSums(is.na(dfTest)) == 0]
+
+dim(dfTrain)
+dim(dfTest)
+```
+There are still a lot of predictors (53) and training was taking a long time. So I perform some correlation analysis to see if additional variables could be eliminated.
+```{r}
+correlation <- cor(dfTrain[sapply(dfTrain, is.numeric)])
+dim(correlation)
+removeCols <- findCorrelation(correlation, cutoff=0.90, verbose=TRUE)
+dfTrain <- dfTrain[, -removeCols]
+dfTest <- dfTest[, -removeCols]
+dim(dfTrain)
+dim(dfTest)
+```
+
+We're now down to a barely manageable number of predictors (46).
+
+With some of the training methods, it was necessary to transform the class into a factor.
+```{r}
+dfTrain$classe <- factor(dfTrain$classe)
+```
+
+And, finally I partition the training set to allow for cross-validation.
+
+```{r}
+set.seed(1234)
+dfPartition <- createDataPartition(y=dfTrain$classe, p=0.6, list=FALSE)
+training <- dfTrain[dfPartition, ]
+testing <- dfTrain[-dfPartition, ]
+
+dim(training)
+unique(training$classe)
+
+descMain <- "Bar Plot of Frequency by Classe\nfor the Training Partition of the Training Set (60%)"
+plot(training$classe,
+     col="green",
+     main=descMain,
+     xlab="Classe",
+     ylab="Frequency",
+     ylim=c(0, 3500)
+)
+```
+
+The partitioned data sets have a consistent number of variables with 60% of the observations allocated to training and 40% to testing. There are five unique values in the classe variable (A-E) with frequencies ranging from a low of just less than 2000 for D to a high of ~3300 for A.
+
+### Generate models and cross-validate
+
+I intially chose four models (partially for my own curiosity) for training and cross-validation. However, I wasn't able to knit all of these into one file due to the heavy processing loads of some of the models. So, for Models 2, 3 and 4, I ran them individually and included the results here. So that you may recreate these results, I have included the R code for each model in the appendix.
+
+##### Model 1 - CART because it allowed for fancy rpart plot. Results were poor. 
+```{r}
+model1 <- train(classe ~ ., data=training, method="rpart")
+print(model1$finalModel)
+fancyRpartPlot(model1$finalModel)
+prediction1 <- predict(model1, testing)
+cm1 <- confusionMatrix(prediction1, testing$classe)
+```
+Cross-validation accuracy of `r round(cm1$overall['Accuracy']*100, 2)`% and a 95% confidence interval (CI) of at least `r round(cm1$overall['AccuracyLower']*100, 2)`% isn't a good result. The out-of-sample error rate (1 - accuracy) is `r round((1 - cm1$overall['Accuracy'])*100, 2)`.
+
+##### Model 2 - Boosted Trees had results that were nearly as good as Model 4 below but it was processing intensive and took a long time to run. Cross-validation accuracy of 99.22% and the 95% CI is at least 99.0. 
+
+##### Model 3 - Linear discriminant analysis had poor results. Cross-validation accuracy of 67.51% isn't all that useful.
+
+##### Model 4 and 4a - Random Forest had the best results of all the models. I used both the caret version of training with method = 'rf' and randomForest. randomForest was much faster than caret and both had similar results for accuracy and CI. The code for the caret version of random forest in included in model 4 in the appendix.
+
+```{r}
+model4a <- randomForest(classe~., data=training, importance=TRUE, keep.forest=TRUE)
+prediction4a <- predict(model4a, testing)
+cm4a <- confusionMatrix(prediction4a, testing$classe)
+cm4a
+```
+Cross-validation accuracy of `r round(cm4a$overall['Accuracy']*100, 2)`% and a 95% CI is at least `r round(cm4a$overall['AccuracyLower']*100, 2)`% lookes to be a solid, predictive model. The out-of-sample error rate (1 - accuracy) is `r round((1 - cm4a$overall['Accuracy'])*100, 2)`.
+
+Here, I show the top 30 predictors in the plot. During exploration, I was able to reduce the number of variables by reviewing this and it did save some time in processing but also caused a significant decrease in both the accuracy and CI. If the random forest method was used in the future and resulted in overfitting, revisiting the training with fewer variables may be necessary.
+
+```{r}
+varImpPlot(model4a, main="Top 30 Variables by Importance", scale=FALSE)
+```
+
+###  Make a prediction and output results
+As the final step, I predict the outcome on the orginal testing data set using Random Forest algorithm (model 4a).
+```{r}
+predictedOutcome <- predict(model4a, dfTest)
+predictedOutcome
+```
+
+And, now the results are written to files for submittal of which all 20 were correct.
+```{r}
+prefix <- paste(dirOutput, "output_", sep="/")
+writeOutput=function(x){
+        n=length(x)
+        for(i in 1:n){
+                filename=paste(prefix, i, ".txt", sep="")
+                write.table(x[i],
+                            file=filename,
+                            quote=FALSE,
+                            row.names=FALSE,
+                            col.names=FALSE)
+        }
+}
+
+writeOutput(predictedOutcome)
+
+```
+\pagebreak
+
+### Appendix
+
+#### Model 1 - CART
+
+model1 <- train(classe ~ ., data=training, method="rpart");
+print(model1$finalModel);
+fancyRpartPlot(model1$finalModel);
+prediction1 <- predict(model1, testing);
+cm1 <- confusionMatrix(prediction1, testing$classe);
+cm1;
+
+#### Model 2 - Boosted Trees
+
+tuneGrid <- expand.grid(n.trees=seq(1,501,10),
+                        interaction.depth=2:5,
+                        shrinkage=0.1,
+                        n.minobsinnode=10);
+fitControl <- trainControl(method="repeatedcv",
+                           number=3,
+                           repeats=1,
+                           verboseIter=FALSE,
+                           returnResamp="all");
+model2 <- train(classe ~ .,
+                data=training,
+                method="gbm",
+                trControl=fitControl,
+                tuneGrid=tuneGrid);
+
+prediction2 <- predict(model2, testing);
+cm2 <- confusionMatrix(prediction2, testing$classe);
+cm2;
+
+#### Model 3 - Linear Discriminate Analysis
+
+model3 <-train(classe ~ ., data=training, method='lda');
+prediction3 <- predict(model3, testing);
+cm3 <- confusionMatrix(prediction3, testing$classe);
+cm3;
+
+#### Model 4 - Random Forest using caret
+
+model4 <- train(classe ~ ., data=training, method="rf");
+print(model4$finalModel);
+prediction4 <- predict(model4, testing);
+cm4 <- confusionMatrix(prediction4, testing$classe);
+cm4;

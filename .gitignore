@@ -1,0 +1,9 @@
+#BEGIN GIT IGNORES
+../
+/data/
+/output/
+/Project_files/
+/.Rproj.user/
+
+.RData
+.Rhistory
